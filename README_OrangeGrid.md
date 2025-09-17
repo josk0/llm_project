@@ -27,6 +27,8 @@ fi
 
 ## Todos other
 * finetuning_skip.py
+    * finetuning runs hang
+    * find a way to use more than onw GPU
     * check truncation in formatting_prompts_func(). Added special tokens to check limit of max_sequence length. "Token indices sequence length is longer than the specified maximum sequence length for this model"
     * logging doesn't seem to work. Don't see anything at stdout at any rate. Maybe no logger set up? 
 * clean.py is pretty messy
