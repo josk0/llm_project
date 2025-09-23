@@ -560,17 +560,7 @@ peft_config = LoraConfig(
     ],  # Target modules for LoRA
 )
 
-# for debug "UserWarning: Already found a `peft_config` attribute in the model."
-# Check BEFORE applying PEFT -- returns FALSE
-print("BEFORE get_peft_model: \n")
-print("Has peft_config?", hasattr(model, 'peft_config'))
-
 model = get_peft_model(model, peft_config)
-
-# for debug "UserWarning: Already found a `peft_config` attribute in the model."
-# Check AFTER applying PEFT --- returns TRUE
-print("AFTER get_peft_model: \n")
-print("Has peft_config?", hasattr(model, 'peft_config'))
 
 
 batch_size = 4
