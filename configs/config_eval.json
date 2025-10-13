@@ -3,7 +3,7 @@
   "load_cleaned": true,
   "logic_data":  "/home/dhonchar/llm_project/logic_dataset/test_dataset.csv",
   "model_dir": "Qwen/Qwen2.5-3B-Instruct",
-  "finetuned_path": "/home/dhonchar/llm_project/trained_models/1",
+  "finetuned_path": "/home/jrhimmel/workspace/llm_project/llm_scripts/output_skip_5/final_model",
   "batch_size": 1,
   "batch_size_eval": 16,
   "eval_length_prompt": 2048,
