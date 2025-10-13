@@ -50,8 +50,8 @@ git clone <repository-url>
 cd llm_project
 
 # Create and activate conda environment
-conda create -n llm_project python=3.10 -y
-conda activate llm_project
+conda create -n <environment name> python=3.10 -y
+conda activate <environment name>
 
 # Install dependencies
 pip install -r requirements.txt
@@ -69,7 +69,7 @@ By default, conda environments are expected to be:
 
 | Cluster job    | Environment name |
 |:---------------|-----------------:|
-| ```clean_scripts/``` |          ```llm_project``` |
+| ```clean_scripts/``` |          ```data_cleaning``` |
 | ```eval_scripts/```  |          ```eval_model``` |
 | ```llm_scripts/```   |          ```llm_finetuning``` |
 
@@ -274,3 +274,9 @@ For questions and support:
 ---
 
 **Note**: This project is designed for research purposes. Ensure you have appropriate licenses and permissions for any models or datasets you use.
+
+## Acknowledgements
+
+This project was supported as part of a grant (#G2023-20946) from the Alfred P. Sloan Foundation.
+
+Thanks to @honcharov-danylo who wrote the code and got the scripts to run on Syracuse University's OrangeGrud cluster during a 2025 summer project.

@@ -26,28 +26,39 @@ from transformers import GenerationConfig
 import json
 import gzip
 
-from dotenv import load_dotenv
-from b2_uploader import B2Uploader
+# from dotenv import load_dotenv
+# from b2_uploader import B2Uploader
 import time
 from pathlib import Path
 
 import gc, torch
 import os, tempfile, wandb, json
+from utils import Config
 
 from lighteval.logging.evaluation_tracker import EvaluationTracker
 from lighteval.pipeline import Pipeline, PipelineParameters, ParallelismManager
 from lighteval.models.transformers.transformers_model import TransformersModelConfig
 import argparse, pathlib, sys
+
 import logging
 
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from utils import Config
+
 
 config = Config("../configs/config_finetuning.json")
 os.environ["WANDB_PROJECT"] = config["WANDB_PROJECT"]   # must come before Trainer is built
 os.environ["WANDB_LOG_MODEL"] = config["WANDB_LOG_MODEL"]
 
+# download punkt if we don't have it already (the sent_tokenize function requires it)
+try:
+    nltk.data.find('tokenizers/punkt_tab')
+except LookupError:
+    nltk.download('punkt_tab')
 
 path_to_out = Path(config["output_dir"])
 path_to_out.mkdir(exist_ok=True)
@@ -152,13 +163,13 @@ class LightEvalCallback(TrainerCallback):
         }
         wandb.log(flat, step=state.global_step)
 
-
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_use_double_quant=False,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-)
+# disable quantization for now
+# bnb_config = BitsAndBytesConfig(
+#     load_in_4bit=True,
+#     bnb_4bit_use_double_quant=False,
+#     bnb_4bit_quant_type="nf4",
+#     bnb_4bit_compute_dtype=torch.bfloat16,
+# )
 
 light_tasks = [
     "leaderboard|truthfulqa:mc|0|0",
@@ -170,11 +181,12 @@ callbacks = []
 
 
 model_dir = config["model_dir"]
-# model_dir = "Qwen/Qwen2.5-0.5B"
-tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True, max_length = 50000)
+
+tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)
+tokenizer.model_max_length = config["max_sequence_length"]  # 4096 currently. Could try 2048 for safer memory usage, original was 50000; but problematic for memory usage
 model = AutoModelForCausalLM.from_pretrained(
     model_dir,
-    quantization_config=bnb_config,
+    # quantization_config=bnb_config, disable quantization for now
     device_map="auto",
     torch_dtype=torch.bfloat16,
     trust_remote_code=True
@@ -472,6 +484,13 @@ def formatting_prompts_func(examples):
         if not response.endswith(tokenizer.eos_token):
             response += tokenizer.eos_token
         text = train_prompt_style.format(question, response)
+
+        # Truncate
+        tokens = tokenizer.encode(text, add_special_tokens=False) 
+        if len(tokens) > config["max_eval_tok"]:
+            tokens = tokens[:config["max_eval_tok"]]
+            text = tokenizer.decode(tokens, skip_special_tokens=True)
+
         texts.append(text)
     return {"text": texts}
 
@@ -492,16 +511,13 @@ def truncate_long_prompts(batch):
         >>> batch = {"text": ["very long prompt..."]}
         >>> result = truncate_long_prompts(batch)
     """
+    
     trimmed = []
     for txt in batch["text"]:                 # txt is a string
-        ids = tokenizer.encode(
-            txt,
-            add_special_tokens=False,
-            truncation=False,
-        )
-        if len(ids) > config["max_eval_tok"]:
-            ids = ids[:config["max_eval_tok"]]
-            txt = tokenizer.decode(ids, skip_special_tokens=True)
+        tokens = tokenizer.encode(txt, add_special_tokens=False)
+        if len(tokens) > config["max_eval_tok"]:
+            tokens = tokens[:config["max_eval_tok"]]
+            txt = tokenizer.decode(tokens, skip_special_tokens=True)
         trimmed.append(txt)
     return {"text": trimmed}
 
@@ -545,6 +561,7 @@ peft_config = LoraConfig(
 )
 
 model = get_peft_model(model, peft_config)
+
 
 batch_size = 4
 steps = int(500000/batch_size)
@@ -612,8 +629,9 @@ trainer.save_model(final_model_path)
 
 output_dir_last = "{}/".format(output_dir)
 
-load_dotenv()
-uploader = B2Uploader()
-uploader.upload_file(final_model_path, "{}_{}".format(config["model_dir"], int(time.time())))
+# Disable B2 uploading for now
+# load_dotenv()
+# uploader = B2Uploader()
+# uploader.upload_file(final_model_path, "{}_{}".format(config["model_dir"], int(time.time())))
 
 wandb.finish()
