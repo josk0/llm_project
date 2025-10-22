@@ -35,10 +35,11 @@ conda activate eval_model
 
 pip install torch transformers peft datasets tqdm simphile faststylometry spacy nltk
 python -m spacy download en_core_web_md
+python -m spacy download en_core_web_sm
 ````
 
 > The scripts import `faststylometry` (Burrows’ Delta), `simphile` (Jaccard/Compression similarity), `spacy` (semantic similarity), `peft` (adapter loading), and HF `datasets`.
-
+> The logic eval script needs `en_core_web_sm` that's why we're already downloading it here.
 ---
 
 ## Configuration

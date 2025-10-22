@@ -1,0 +1,22 @@
+{
+    "streams": [
+      {
+        "name": "my-zotero-library",
+        "documents": [
+          "v0.61/documents/**/*.gz"
+        ],
+        "output": {
+          "path": "example0/documents",
+          "max_size_in_bytes": 1000000000
+        },
+        "span_replacement": [
+          {
+            "span": "$.attributes.ft_lang_id_en_paragraph_v2",
+            "min_score": 0.5,
+            "replacement": ""
+          }
+        ]
+      }
+    ],
+    "processes": 1
+  }
