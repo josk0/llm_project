@@ -1,14 +1,23 @@
-transformers
-datasets
-nltk
-tqdm
-peft
-trl
-sentence-transformers
-torch
-nvidia-cuda-cupti-cu12==12.6.80
-nvidia-cuda-nvrtc-cu12==12.6.77
-nvidia-cuda-runtime-cu12==12.6.77
-wandb
-lighteval
-python-dotenv
+# Finetuning Dependencies
+# NOTE: For conda users, it's better to use environment.yml instead of this file
+# This file is for pip-only users. See environment.yml for conda setup.
+
+# Core ML Libraries
+torch>=2.0.0,<3.0.0
+transformers>=4.40.0
+datasets>=2.14.0
+accelerate>=0.27.0  # CRITICAL: Required for multi-GPU training
+peft>=0.7.0
+trl>=0.8.0
+
+# Data & Text Processing
+tqdm>=4.66.0
+sentence-transformers>=2.2.0
+python-dotenv>=1.0.0
+
+# Monitoring & Logging
+wandb>=0.15.0
+lighteval>=0.3.0
+
+# Note: CUDA runtime is better installed via conda (pytorch::pytorch-cuda)
+# Do NOT use nvidia-cuda-* packages with conda, they cause conflicts

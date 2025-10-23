@@ -34,7 +34,26 @@ pip install wandb lighteval  # lighteval is used by the script pipeline
 ````
 
 > `finetuning_skip.py` imports `wandb` and uses `transformers` (4.52.3), `peft` (0.15.2). If you plan to use 8-bit/4-bit loading, also install `bitsandbytes` compatible with your CUDA.
+```
+---
 
+## Workflow
+
+Step 1: Preprocess raw data
+```bash
+$ python llm_scripts/preprocess_markdown_chunks.py \
+  --data-path /path/to/raw/data \
+  --output-dir /path/to/preprocessed \
+  --tokenizer-name Qwen/Qwen2.5-3B-Instruct
+```
+
+Step 2: Update config with preprocessed paths
+(Edit config_finetuning.json: preprocessed_train_path, preprocessed_eval_path)
+
+Step 3: Run finetuning
+```bash
+$ python llm_scripts/finetuning_skip.py
+```
 ---
 
 ## Configuration

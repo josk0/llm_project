@@ -1,0 +1,43 @@
+name: llm_finetuning_new
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  # Python version
+  - python=3.11
+
+  # PyTorch with CUDA support (pytorch channel handles CUDA automatically)
+  - pytorch::pytorch::2.4.*
+  - pytorch::pytorch-cuda::12.0
+  - pytorch::pytorch-cuda::12.0
+
+  # Core ML libraries
+  - pip
+  - pip:
+    # HuggingFace ecosystem (install via pip after conda base setup)
+    - transformers>=4.40.0
+    - datasets>=2.14.0
+    - accelerate>=0.27.0
+    - peft>=0.7.0
+    - trl>=0.8.0
+
+    # Additional ML/Data libraries
+    - sentence-transformers>=2.2.0
+
+    # Utilities
+    - tqdm>=4.66.0
+    - python-dotenv>=1.0.0
+
+    # Monitoring
+    - wandb>=0.15.0
+    - lighteval>=0.3.0
+
+  # System libraries
+  - cuda-version=12.0
+  - h5py
+  - numpy
+  - scikit-learn
+
+variables:
+  CUDA_HOME: $CONDA_PREFIX

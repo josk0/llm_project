@@ -5,7 +5,8 @@ Here are scripts to build a dataset from a zotero liberary
 3. run OCR, on cluster using ocr.sub (adjust paths in conda_wrapper_ocr.sh)
 4. delete orphaned files using prune_dolma_dataset.py
 5. run additional markdown cleaning using clean_mds_in_folder.sh
-6. inspect the results, then run merge_mds_into_dolmadocs.py
+6. inspect the results, then run merge_mds_into_dolmadocs.py.
+7. Make sure no files or folder have semicolons in the name
 7. run dolma taggers 
 8. output the dataset with `dolma -c zotero-mixer.json mix`
 

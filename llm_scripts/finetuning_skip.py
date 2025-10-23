@@ -1,5 +1,55 @@
-import os
+"""
+Qwen LLM Finetuning with LoRA - Multi-GPU Support
 
+This script finetunes Qwen2.5 or Qwen3 models using:
+  - LoRA (Low-Rank Adaptation) for efficient finetuning
+  - Preprocessed markdown chunks (prepared by preprocess_markdown_chunks.py)
+  - Qwen chat template for instruction tuning
+  - Distributed Data Parallel (DDP) for multi-GPU training
+
+=== RUNNING ON MULTI-GPU (e.g., 2x A100) ===
+
+Option 1: Using accelerate (recommended for HTCondor)
+  $ accelerate launch finetuning_skip.py
+
+Option 2: Using torchrun (manual process spawning)
+  $ torchrun --nproc_per_node=2 finetuning_skip.py
+
+Option 3: Direct execution (auto-detects GPUs if only 1 GPU)
+  $ python finetuning_skip.py
+
+The script will:
+  - Auto-detect available GPUs on startup (logged at beginning)
+  - Automatically use DDP if multiple GPUs are detected
+  - Calculate effective batch size = per_device_batch_size * num_gpus * grad_accum_steps
+  - Distribute data across GPUs transparently
+
+=== HTCondor SUBMISSION EXAMPLE ===
+
+Create submit file with:
+  request_gpus = 2
+  request_memory = 80 GB
+  executable = /path/to/accelerate_wrapper.sh
+
+Where accelerate_wrapper.sh contains:
+  #!/bin/bash
+  cd /path/to/llm_project
+  source /path/to/venv/bin/activate
+  accelerate launch llm_scripts/finetuning_skip.py
+
+=== PERFORMANCE TIPS ===
+
+For 2x A100 (141GB total):
+  - Current: batch_size=4 per GPU, effective=16 (with grad_accum=2)
+  - Faster: batch_size=8 per GPU, effective=32 (uses ~60GB total)
+    Edit: per_device_train_batch_size=8 in config or script
+
+Monitor GPU utilization:
+  - Run on compute node: nvidia-smi -l 1
+  - Check in WandB: gpu and gpu_memory charts should show both GPUs
+"""
+
+import os
 
 #import subprocess
 #subprocess.run("yes | pip install bitsandbytes")
@@ -9,11 +59,9 @@ transformers.utils.is_rich_available = lambda: False
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from datasets import load_dataset
-import nltk
 from tqdm import trange, tqdm
 import os
 from typing import List, Dict, Iterator
-from nltk.tokenize import sent_tokenize
 import datasets
 from transformers import DataCollatorForLanguageModeling
 from peft import LoraConfig, get_peft_model
@@ -54,14 +102,23 @@ config = Config("../configs/config_finetuning.json")
 os.environ["WANDB_PROJECT"] = config["WANDB_PROJECT"]   # must come before Trainer is built
 os.environ["WANDB_LOG_MODEL"] = config["WANDB_LOG_MODEL"]
 
-# download punkt if we don't have it already (the sent_tokenize function requires it)
-try:
-    nltk.data.find('tokenizers/punkt_tab')
-except LookupError:
-    nltk.download('punkt_tab')
+# NLTK no longer needed for preprocessing; using section-aware chunking instead
 
 path_to_out = Path(config["output_dir"])
 path_to_out.mkdir(exist_ok=True)
+
+# GPU Detection and Logging
+num_gpus = torch.cuda.device_count()
+logging.info(f"GPU Detection: {num_gpus} GPU(s) available")
+for i in range(num_gpus):
+    gpu_name = torch.cuda.get_device_name(i)
+    gpu_mem = torch.cuda.get_device_properties(i).total_memory / (1024**3)
+    logging.info(f"  GPU {i}: {gpu_name} ({gpu_mem:.1f} GB)")
+
+if num_gpus == 0:
+    logging.warning("⚠️  No GPUs detected! Training will use CPU (very slow)")
+elif num_gpus > 1:
+    logging.info(f"✓ Multi-GPU training enabled: {num_gpus} GPUs will be used with DDP")
 
 def run_lighteval(checkpoint_path, tasks):
     """
@@ -195,116 +252,77 @@ model = AutoModelForCausalLM.from_pretrained(
 model.config.use_cache = False
 model.config.pretraining_tp = 1
 
+# System message for Qwen chat template
+SYSTEM_MESSAGE = "You are a scientist with advanced knowledge in philosophy and social sciences. Please, write the next paragraph for the following text."
 
-train_prompt_style = """Below is an instruction that describes a task, paired with an input that provides further context. 
-Write a response that appropriately completes the request. 
+logging.info("Loading preprocessed datasets:")
 
-### Instruction:
-You are a scientist with advanced knowledge in philosophy and social sciences. 
-Please, write next paragraph for the following text. 
-
-### Text:
-{}
-
-### Response:
-{}"""
-
-logging.info("Loading dataset:")
-
-
-if config['load_cleaned']:
-    inputs = []
-    for file in os.listdir(config["data_path"]):
-        with gzip.open("{}/{}".format(config["data_path"], file), "rt") as f:
-            subsamples = json.load(f)
-            inputs.extend(list(subsamples.values()))
-else:
-    inputs = []
-    for file in os.listdir(config["data_path"]):
-        with open("{}/{}".format(config["data_path"], file)) as f:
-            inputs.append(f.read())
-    del inputs[6326] # broken file
-
-# temporary reduction of dataset size for testing
-# inputs = inputs[:100]
-
-logging.info("Data loaded.")
-
-def _sample_generator(texts: List[str], start:int, step:int) -> Iterator[Dict[str, str]]:
+def load_preprocessed_dataset(filepath: str) -> datasets.Dataset:
     """
-    Generate training samples from a list of texts.
-    
-    Creates question-answer pairs by splitting texts into sentences and
-    using different portions as context and target.
-    
+    Load preprocessed examples from gzipped JSONL file.
+
+    Expected format: {"context": "...", "response": "...", ...}
+
     Args:
-        texts (List[str]): List of input texts
-        start (int): Starting index for sentence selection
-        step (int): Step size for sentence selection
-        
-    Yields:
-        Dict[str, str]: Dictionary with "question" and "answer" keys
-        
-    Examples:
-        >>> texts = ["This is sentence one. This is sentence two. This is sentence three."]
-        >>> for sample in _sample_generator(texts, 1, 2):
-        ...     print(sample)
-        {'question': 'This is sentence one.', 'answer': 'This is sentence two.'}
-    """
-    for doc in texts:
-        sents = sent_tokenize(doc)
-        for k in range(start, len(sents) + 1, step):
-            yield {
-                "question": " ".join(sents[:k]),
-                "answer":   " ".join(sents[k:k + int(config["predict_sentences"])]),
-            }
+        filepath: Path to gzipped JSONL file
 
-def build_prefixqa_dataset(texts: List[str], start:int, step:int) -> datasets.IterableDataset:
-    """
-    Build a prefix-QA dataset from a list of texts.
-    
-    Creates an iterable dataset for training where the model learns to
-    predict the next sentence(s) given previous sentences as context.
-    
-    Args:
-        texts (List[str]): List of input texts
-        start (int): Starting index for sentence selection
-        step (int): Step size for sentence selection
-        
     Returns:
-        datasets.IterableDataset: Dataset with question-answer pairs
-        
-    Examples:
-        >>> dataset = build_prefixqa_dataset(texts, 1, 10)
-        >>> for example in dataset:
-        ...     print(example)
+        datasets.Dataset with "context" and "response" columns
     """
-    features = datasets.Features({
-        "question": datasets.Value("string"),
-        "answer":   datasets.Value("string"),
+    examples = []
+    line_count = 0
+
+    logging.info(f"  Opening {filepath}...")
+    with gzip.open(filepath, 'rt', encoding='utf-8') as f:
+        for line_num, line in enumerate(f):
+            try:
+                example = json.loads(line)
+                examples.append({
+                    "context": example.get("context", ""),
+                    "response": example.get("response", ""),
+                })
+                line_count += 1
+
+                # Log progress every 1000 lines
+                if line_count % 1000 == 0:
+                    logging.info(f"  Loaded {line_count} examples from {filepath}")
+
+            except json.JSONDecodeError as e:
+                logging.warning(f"  Line {line_num}: JSON decode error: {e}")
+                continue
+
+    logging.info(f"  Loaded {line_count} total examples from {filepath}")
+
+    return datasets.Dataset.from_dict({
+        "context": [ex["context"] for ex in examples],
+        "response": [ex["response"] for ex in examples],
     })
-    return datasets.IterableDataset.from_generator(
-        lambda: _sample_generator(texts, start, step),  # generator **factory**
-        features=features,
-    )
 
+# Load train and eval datasets from preprocessed paths
+train_path = config.get("preprocessed_train_path")
+eval_path = config.get("preprocessed_eval_path")
 
-logging.info("Building datasets:")
+if not train_path or not eval_path:
+    raise ValueError("Config must specify preprocessed_train_path and preprocessed_eval_path")
 
-ds = build_prefixqa_dataset(inputs, 1, 10)
-eval_ds = build_prefixqa_dataset(inputs, 5, 20) # create eval in different way with different steps
+logging.info(f"Loading train data from {train_path}")
+ds = load_preprocessed_dataset(train_path)
 
-logging.info("Datasets are built.")
+logging.info(f"Loading eval data from {eval_path}")
+eval_ds = load_preprocessed_dataset(eval_path)
+
+logging.info(f"Datasets loaded: train={len(ds)}, eval={len(eval_ds)}")
 
 EOS_TOKEN = tokenizer.eos_token  # Must add EOS_TOKEN
 
 style_encoder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
-logging.info("Encoding eval dataset:")
+logging.info("Encoding eval dataset for style similarity (this may take several minutes):")
 
-sample_train_texts = [ex["answer"]              # or ex["text"] in your format
-                      for ex, _ in zip(eval_ds, range(256))]   # take first 4 k
+sample_train_texts = [ex["response"]
+                      for ex, _ in zip(eval_ds, range(256))]   # take first 256
 
+logging.info(f"  Encoding {len(sample_train_texts)} sample responses...")
 style_bank = style_encoder.encode(
     sample_train_texts,
     batch_size=128,
@@ -312,7 +330,7 @@ style_bank = style_encoder.encode(
     device="cuda" if torch.cuda.is_available() else "cpu",
 )
 
-logging.info("Eval dataset is encoded.")
+logging.info(f"  Encoded {len(sample_train_texts)} samples. Style bank shape: {style_bank.shape}")
 
 
 
@@ -393,14 +411,14 @@ class LLMSampleCB(WandbCallback):
     def samples_table(self):
         """
         Create a W&B table with sample predictions and style similarity metrics.
-        
+
         Generates predictions for sample prompts, computes style similarity
         against a style bank, and creates a table for logging.
-        
+
         Returns:
             wandb.Table: Table containing prompts, generations, and metrics
         """
-        prompts = [ex["text"] for ex in self.sample_dataset]
+        prompts = [ex["context"] for ex in self.sample_dataset]
         gens = []  # will collect all generations
 
         for start in range(0, len(prompts), self.chunk_size):
@@ -460,58 +478,69 @@ class LLMSampleCB(WandbCallback):
 
 def formatting_prompts_func(examples):
     """
-    Format examples into training prompts.
-    
-    Converts question-answer pairs into formatted prompts using the
-    training prompt template and adds EOS tokens.
-    
+    Format context-response pairs into Qwen chat template prompts.
+
+    Converts preprocessed chunks into formatted prompts using Qwen's
+    chat template with system message.
+
     Args:
-        examples (dict): Dictionary containing "question" and "answer" keys
-        
+        examples (dict): Dictionary containing "context" and "response" keys
+
     Returns:
-        dict: Dictionary with formatted "text" key
-        
+        dict: Dictionary with formatted "text" key (chat template output)
+
     Examples:
-        >>> examples = {"question": ["Hello"], "answer": ["World"]}
+        >>> examples = {"context": ["Text..."], "response": ["Continuation..."]}
         >>> result = formatting_prompts_func(examples)
         >>> print(result["text"][0])
     """
-    inputs = examples["question"]
-    outputs = examples["answer"]
+    contexts = examples["context"]
+    responses = examples["response"]
     texts = []
-    for question, response in zip(inputs, outputs):
-        # Append the EOS token to the response if it's not already there
-        if not response.endswith(tokenizer.eos_token):
-            response += tokenizer.eos_token
-        text = train_prompt_style.format(question, response)
 
-        # Truncate
-        tokens = tokenizer.encode(text, add_special_tokens=False) 
+    for context, response in zip(contexts, responses):
+        # Build messages for Qwen chat template
+        messages = [
+            {"role": "system", "content": SYSTEM_MESSAGE},
+            {"role": "user", "content": context},
+            {"role": "assistant", "content": response},
+        ]
+
+        # Apply Qwen's chat template
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+
+        # Truncate if necessary
+        tokens = tokenizer.encode(text, add_special_tokens=False)
         if len(tokens) > config["max_eval_tok"]:
             tokens = tokens[:config["max_eval_tok"]]
             text = tokenizer.decode(tokens, skip_special_tokens=True)
 
         texts.append(text)
+
     return {"text": texts}
 
-logging.info("Formatting datasets:")
+logging.info("Formatting datasets (applying Qwen chat template):")
 
 
 def truncate_long_prompts(batch):
     """
     Truncate prompts that exceed the maximum token limit.
-    
+
     Args:
         batch (dict): Batch containing "text" key with prompts
-        
+
     Returns:
         dict: Batch with truncated prompts
-        
+
     Examples:
         >>> batch = {"text": ["very long prompt..."]}
         >>> result = truncate_long_prompts(batch)
     """
-    
+
     trimmed = []
     for txt in batch["text"]:                 # txt is a string
         tokens = tokenizer.encode(txt, add_special_tokens=False)
@@ -522,18 +551,21 @@ def truncate_long_prompts(batch):
     return {"text": trimmed}
 
 
+logging.info(f"  Formatting train dataset ({len(ds)} examples)...")
 dataset = ds.map(
     formatting_prompts_func,
     batched=True,
+    desc="Formatting train",
 )
 
+logging.info(f"  Formatting eval dataset ({len(eval_ds)} examples)...")
 eval_dataset_mapped = eval_ds.map(
     formatting_prompts_func,
     batched=True,
-).map(truncate_long_prompts, batched=True,)
+    desc="Formatting eval",
+).map(truncate_long_prompts, batched=True, desc="Truncating eval")
 
-
-logging.info("Datasets are formatted.")
+logging.info(f"Datasets formatted. Train: {len(dataset)}, Eval: {len(eval_dataset_mapped)}")
 
 data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer,
@@ -563,8 +595,17 @@ peft_config = LoraConfig(
 model = get_peft_model(model, peft_config)
 
 
+# Batch size configuration
+# For 2x A100 (141GB total), these are conservative settings
+# With DDP, effective batch size = per_device_batch_size * num_gpus * gradient_accumulation_steps
 batch_size = 4
-steps = int(500000/batch_size)
+num_gpus = torch.cuda.device_count()
+effective_batch_size = batch_size * num_gpus * 2  # 2 = gradient_accumulation_steps
+logging.info(f"Batch configuration: per_device={batch_size}, num_gpus={num_gpus}, grad_accum=2")
+logging.info(f"  → Effective batch size: {effective_batch_size}")
+logging.info(f"  → To increase throughput on 2x A100, try per_device_batch_size=8 (requires ~60GB total)")
+
+steps = int(500000/effective_batch_size)
 
 eval_dataset = eval_dataset_mapped.take(128)
 
@@ -590,15 +631,18 @@ training_arguments = TrainingArguments(
     bf16=False,
     report_to=["wandb"],
     eval_strategy="steps",
-    eval_steps= eval_every, #0.01,
-    save_steps= 1000, #eval_every,#0.01,
-    disable_tqdm=False
+    eval_steps= eval_every,
+    save_steps= 1000,
+    disable_tqdm=False,
+    # Data loading optimization - prevents GPU stalls
+    dataloader_num_workers=4,           # Use 4 CPU processes for data loading
+    dataloader_pin_memory=True,         # Pin memory for faster GPU transfer
     # predict_with_generate=True,
     # generation_max_length=128
 )
 
 
-logging.info("Building Trainer")
+logging.info("Building Trainer...")
 
 # Initialize the Trainer
 trainer = SFTTrainer(
@@ -607,21 +651,34 @@ trainer = SFTTrainer(
     train_dataset=dataset,
     peft_config=peft_config,
     data_collator=data_collator,
-    callbacks = callbacks,
-    eval_dataset = eval_dataset,
+    callbacks=callbacks,
+    eval_dataset=eval_dataset,
     # compute_metrics=compute_metrics
 )
-logging.info("Starting training")
-
+logging.info("Trainer built successfully")
 
 # wandb_callback = LLMSampleCB(trainer, eval_dataset, chunk_size = 2, num_samples=16, max_new_tokens=256)
 # trainer.add_callback(wandb_callback)
 
+logging.info("Running initial evaluation...")
 trainer.evaluate()
+logging.info("Initial evaluation complete")
 
+logging.info("Clearing cache and preparing for training...")
 gc.collect()
 torch.cuda.empty_cache()
 model.config.use_cache = False
+
+logging.info("=" * 80)
+logging.info("STARTING TRAINING")
+logging.info(f"Total steps: {steps}, Eval every {eval_every} steps, Save every 1000 steps")
+logging.info(f"Batch size: per_device={batch_size}, effective={effective_batch_size} (with {num_gpus} GPU(s))")
+logging.info(f"Learning rate: {training_arguments.learning_rate}")
+logging.info(f"Data loading: {training_arguments.dataloader_num_workers} workers, pin_memory={training_arguments.dataloader_pin_memory}")
+if num_gpus > 1:
+    logging.info(f"✓ Using Distributed Data Parallel (DDP) with {num_gpus} GPUs")
+logging.info("=" * 80)
+
 trainer.train()
 
 final_model_path = "{}/final_model/".format(output_dir)
