@@ -25,25 +25,33 @@ echo "================================================"
 # Activate virtual environment
 conda activate llm_finetuning_new
 
-# Change to project directory
-cd "$PROJECT_PATH" || exit 1
+# Change to project parent directory (llm_project root)
+PROJECT_ROOT="${PROJECT_PATH%/llm_scripts}"
+cd "$PROJECT_ROOT" || exit 1
 
 # Detect available GPUs
-echo "Detecting GPUs..." 
+echo "Detecting GPUs..."
 python -c "
 import torch
 print(f'CUDA available: {torch.cuda.is_available()}')
 print(f'GPU count: {torch.cuda.device_count()}')
 for i in range(torch.cuda.device_count()):
     print(f'  GPU {i}: {torch.cuda.get_device_name(i)}')
-" 2>&1  
+" 2>&1
 
-echo ""  
-echo "Starting training with accelerate launch..."  
-echo ""  
+echo ""
+echo "Starting training with accelerate launch..."
+echo ""
 
 # Run with accelerate (automatically detects and uses all available GPUs)
-accelerate launch llm_scripts/finetuning_skip.py 2>&1  
+# Note: Explicit parameters suppress warnings and ensure reproducibility
+NUM_GPUS=$(python -c "import torch; print(torch.cuda.device_count())")
+accelerate launch \
+  --num_processes="$NUM_GPUS" \
+  --num_machines=1 \
+  --mixed_precision=no \
+  --dynamo_backend=no \
+  llm_scripts/finetuning_skip.py 2>&1  
 
 RETURN_CODE=$?
 
