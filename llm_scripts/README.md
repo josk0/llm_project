@@ -120,7 +120,7 @@ condor_submit finetuning_skip.sub \
   LOGFILE="qwen25_ft"
 ```
 
-The job requests one GPU and requires driver ≥ 12.0. Adjust resources in the `.sub` file if necessary.
+The job requests one GPU and requires driver ≥ 12.1. Adjust resources in the `.sub` file if necessary.
 
 ---
 

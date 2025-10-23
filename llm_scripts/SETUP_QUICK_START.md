@@ -6,7 +6,7 @@
 ```bash
 conda env create -f environment.yml
 ```
-This downloads and installs PyTorch with CUDA 12.0, HuggingFace packages, and everything else.
+This downloads and installs PyTorch with CUDA 12.1, HuggingFace packages, and everything else.
 
 **Time**: 5-10 minutes (first time only)
 
