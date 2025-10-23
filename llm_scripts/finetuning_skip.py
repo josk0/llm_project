@@ -102,7 +102,7 @@ logging.basicConfig(
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 
-config = Config("../configs/config_finetuning.json")
+config = Config(str(Path(__file__).resolve().parent.parent / "configs/config_finetuning.json"))
 os.environ["WANDB_PROJECT"] = config["WANDB_PROJECT"]   # must come before Trainer is built
 os.environ["WANDB_LOG_MODEL"] = config["WANDB_LOG_MODEL"]
 
