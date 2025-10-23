@@ -79,6 +79,10 @@ import gzip
 import time
 from pathlib import Path
 
+import sys
+import pathlib
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 import gc, torch
 import os, tempfile, wandb, json
 from utils import Config
@@ -86,7 +90,7 @@ from utils import Config
 from lighteval.logging.evaluation_tracker import EvaluationTracker
 from lighteval.pipeline import Pipeline, PipelineParameters, ParallelismManager
 from lighteval.models.transformers.transformers_model import TransformersModelConfig
-import argparse, pathlib, sys
+import argparse
 
 import logging
 
