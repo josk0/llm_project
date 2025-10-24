@@ -245,10 +245,18 @@ model_dir = config["model_dir"]
 
 tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)
 tokenizer.model_max_length = config["max_sequence_length"]  # 4096 currently. Could try 2048 for safer memory usage, original was 50000; but problematic for memory usage
+
+# Detect if running in distributed mode (accelerate/DDP)
+# When using accelerate launch with multiple GPUs, WORLD_SIZE > 1
+is_distributed = int(os.environ.get("WORLD_SIZE", "1")) > 1
+
+logging.info(f"Distributed training mode: {is_distributed}")
+
+# device_map='auto' conflicts with DDP - only use it for single GPU
 model = AutoModelForCausalLM.from_pretrained(
     model_dir,
     # quantization_config=bnb_config, disable quantization for now
-    device_map="auto",
+    device_map="auto" if not is_distributed else None,
     torch_dtype=torch.bfloat16,
     trust_remote_code=True
 )
@@ -560,7 +568,7 @@ dataset = ds.map(
     formatting_prompts_func,
     batched=True,
     desc="Formatting train",
-)
+).map(truncate_long_prompts, batched=True, desc="Truncating train")
 
 logging.info(f"  Formatting eval dataset ({len(eval_ds)} examples)...")
 eval_dataset_mapped = eval_ds.map(

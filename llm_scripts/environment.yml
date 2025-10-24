@@ -17,6 +17,9 @@ dependencies:
   - numpy
   - scikit-learn
 
+  # Random: transitive dependency that wasn't resolved
+  - emoji
+
   - pip
   - pip:
     - transformers>=4.40.0
