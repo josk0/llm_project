@@ -12,6 +12,9 @@ dependencies:
   - pytorch=2.4.*
   - pytorch-cuda=12.1
 
+  # Optimizers (required for paged_adamw_32bit)
+  - bitsandbytes
+
   # System libraries
   - h5py
   - numpy

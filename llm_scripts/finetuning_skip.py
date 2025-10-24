@@ -525,11 +525,15 @@ def formatting_prompts_func(examples):
             add_generation_prompt=False,
         )
 
-        # Truncate if necessary
-        tokens = tokenizer.encode(text, add_special_tokens=False)
-        if len(tokens) > config["max_eval_tok"]:
-            tokens = tokens[:config["max_eval_tok"]]
-            text = tokenizer.decode(tokens, skip_special_tokens=True)
+        # Truncate if necessary (with proper truncation to avoid warnings)
+        tokens = tokenizer.encode(
+            text,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=config["max_eval_tok"]
+        )
+        # Decode back to text to ensure consistent formatting
+        text = tokenizer.decode(tokens, skip_special_tokens=True)
 
         texts.append(text)
 
@@ -541,6 +545,9 @@ logging.info("Formatting datasets (applying Qwen chat template):")
 def truncate_long_prompts(batch):
     """
     Truncate prompts that exceed the maximum token limit.
+
+    NOTE: This function is now redundant since truncation already happens
+    in formatting_prompts_func. Kept for backwards compatibility.
 
     Args:
         batch (dict): Batch containing "text" key with prompts
@@ -555,10 +562,13 @@ def truncate_long_prompts(batch):
 
     trimmed = []
     for txt in batch["text"]:                 # txt is a string
-        tokens = tokenizer.encode(txt, add_special_tokens=False)
-        if len(tokens) > config["max_eval_tok"]:
-            tokens = tokens[:config["max_eval_tok"]]
-            txt = tokenizer.decode(tokens, skip_special_tokens=True)
+        tokens = tokenizer.encode(
+            txt,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=config["max_eval_tok"]
+        )
+        txt = tokenizer.decode(tokens, skip_special_tokens=True)
         trimmed.append(txt)
     return {"text": trimmed}
 
