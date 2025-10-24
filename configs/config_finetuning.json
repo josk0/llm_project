@@ -6,8 +6,8 @@
   "WANDB_PROJECT": "llm-finetuning-skip-stylo",
   "WANDB_LOG_MODEL": "checkpoint",
 
-  "preprocessed_train_path": "/home/jrhimmel/datasets/zotero-library/v0.61-prepprocessed/train.jsonl.gz",
-  "preprocessed_eval_path": "/home/jrhimmel/datasets/zotero-library/v0.61-prepprocessed/eval.jsonl.gz",
+  "preprocessed_train_path": "/home/jrhimmel/datasets/zotero-library/v0.61-preprocessed/train.jsonl.gz",
+  "preprocessed_eval_path": "/home/jrhimmel/datasets/zotero-library/v0.61-preprocessed/eval.jsonl.gz",
 
   "target_context_tokens": 1200,
   "target_response_tokens": 200
