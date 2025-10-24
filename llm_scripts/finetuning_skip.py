@@ -246,6 +246,11 @@ model_dir = config["model_dir"]
 tokenizer = AutoTokenizer.from_pretrained(model_dir, use_fast=True)
 tokenizer.model_max_length = config["max_sequence_length"]  # 4096 currently. Could try 2048 for safer memory usage, original was 50000; but problematic for memory usage
 
+# Set pad_token if not already set (Qwen models use eos_token as pad_token)
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+
 # Detect if running in distributed mode (accelerate/DDP)
 # When using accelerate launch with multiple GPUs, WORLD_SIZE > 1
 is_distributed = int(os.environ.get("WORLD_SIZE", "1")) > 1
@@ -310,6 +315,108 @@ def load_preprocessed_dataset(filepath: str) -> datasets.Dataset:
         "response": [ex["response"] for ex in examples],
     })
 
+
+def get_formatted_cache_path(preprocessed_path: str) -> str:
+    """
+    Derive the formatted cache directory path from preprocessed file path.
+
+    Converts path like:
+      /path/to/v0.61-preprocessed/train.jsonl.gz
+    To:
+      /path/to/v0.61-formatted/train
+
+    Args:
+        preprocessed_path: Path to the preprocessed .jsonl.gz file
+
+    Returns:
+        Path to the formatted cache directory
+    """
+    path = Path(preprocessed_path)
+
+    # Get the parent directory (e.g., /path/to/v0.61-preprocessed)
+    parent = path.parent
+
+    # Get the base filename without extensions (e.g., train.jsonl.gz -> train)
+    base_name = path.name.replace('.jsonl.gz', '').replace('.jsonl', '')
+
+    # Replace 'preprocessed' with 'formatted' in the parent directory name
+    formatted_parent = str(parent).replace('-preprocessed', '-formatted')
+
+    # Construct the cache path
+    cache_path = Path(formatted_parent) / base_name
+
+    return str(cache_path)
+
+
+def load_or_create_formatted_dataset(preprocessed_path: str, is_train: bool = True) -> datasets.Dataset:
+    """
+    Load formatted dataset from cache, or create and cache it if not exists.
+
+    This function implements a two-tier caching strategy:
+    1. Checks for pre-formatted dataset on disk (instant loading)
+    2. If not found, loads JSONL, formats with HF caching, and saves to disk
+
+    Args:
+        preprocessed_path: Path to the preprocessed .jsonl.gz file
+        is_train: Whether this is training data (for logging purposes)
+
+    Returns:
+        Formatted dataset ready for training
+    """
+    cache_path = get_formatted_cache_path(preprocessed_path)
+    force_recreate = config.get("force_recreate_cache", False)
+    dataset_type = "train" if is_train else "eval"
+
+    # Check if formatted cache exists and we're not forcing recreation
+    if Path(cache_path).exists() and not force_recreate:
+        logging.info(f"✓ Found formatted {dataset_type} cache at {cache_path}")
+        logging.info(f"  Loading formatted {dataset_type} dataset from cache (instant)...")
+        ds = datasets.load_from_disk(cache_path)
+        logging.info(f"  Loaded {len(ds)} formatted {dataset_type} examples from cache")
+        return ds
+
+    # Cache doesn't exist or forced recreation - need to format
+    if force_recreate:
+        logging.info(f"Force recreate enabled - regenerating {dataset_type} cache")
+    else:
+        logging.info(f"No formatted {dataset_type} cache found at {cache_path}")
+
+    logging.info(f"Loading and formatting {dataset_type} dataset from {preprocessed_path}")
+
+    # Load the preprocessed JSONL
+    ds = load_preprocessed_dataset(preprocessed_path)
+
+    # Create cache directory for HuggingFace's internal .map() cache
+    hf_cache_dir = Path(cache_path).parent / ".hf_cache"
+    hf_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    # Apply formatting with explicit HF caching
+    logging.info(f"  Applying chat template formatting to {dataset_type} dataset...")
+    ds = ds.map(
+        formatting_prompts_func,
+        batched=True,
+        desc=f"Formatting {dataset_type}",
+        cache_file_name=str(hf_cache_dir / f"{dataset_type}_formatted.arrow"),
+    )
+
+    # Apply truncation with explicit HF caching
+    logging.info(f"  Truncating long prompts in {dataset_type} dataset...")
+    ds = ds.map(
+        truncate_long_prompts,
+        batched=True,
+        desc=f"Truncating {dataset_type}",
+        cache_file_name=str(hf_cache_dir / f"{dataset_type}_truncated.arrow"),
+    )
+
+    # Save the formatted dataset to disk for future runs
+    logging.info(f"  Saving formatted {dataset_type} dataset to {cache_path}")
+    Path(cache_path).parent.mkdir(parents=True, exist_ok=True)
+    ds.save_to_disk(cache_path)
+    logging.info(f"✓ Formatted {dataset_type} dataset cached successfully ({len(ds)} examples)")
+
+    return ds
+
+
 # Load train and eval datasets from preprocessed paths
 train_path = config.get("preprocessed_train_path")
 eval_path = config.get("preprocessed_eval_path")
@@ -317,13 +424,19 @@ eval_path = config.get("preprocessed_eval_path")
 if not train_path or not eval_path:
     raise ValueError("Config must specify preprocessed_train_path and preprocessed_eval_path")
 
-logging.info(f"Loading train data from {train_path}")
-ds = load_preprocessed_dataset(train_path)
+logging.info("=" * 80)
+logging.info("DATASET LOADING AND CACHING")
+logging.info("=" * 80)
 
-logging.info(f"Loading eval data from {eval_path}")
-eval_ds = load_preprocessed_dataset(eval_path)
+# Load or create formatted datasets (with automatic caching)
+logging.info(f"Loading/formatting train data from {train_path}")
+dataset = load_or_create_formatted_dataset(train_path, is_train=True)
 
-logging.info(f"Datasets loaded: train={len(ds)}, eval={len(eval_ds)}")
+logging.info(f"Loading/formatting eval data from {eval_path}")
+eval_dataset_mapped = load_or_create_formatted_dataset(eval_path, is_train=False)
+
+logging.info(f"Datasets ready: train={len(dataset)}, eval={len(eval_dataset_mapped)}")
+logging.info("=" * 80)
 
 EOS_TOKEN = tokenizer.eos_token  # Must add EOS_TOKEN
 
@@ -332,7 +445,7 @@ style_encoder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 logging.info("Encoding eval dataset for style similarity (this may take several minutes):")
 
 sample_train_texts = [ex["response"]
-                      for ex, _ in zip(eval_ds, range(256))]   # take first 256
+                      for ex, _ in zip(eval_dataset_mapped, range(256))]   # take first 256
 
 logging.info(f"  Encoding {len(sample_train_texts)} sample responses...")
 style_bank = style_encoder.encode(
@@ -539,8 +652,6 @@ def formatting_prompts_func(examples):
 
     return {"text": texts}
 
-logging.info("Formatting datasets (applying Qwen chat template):")
-
 
 def truncate_long_prompts(batch):
     """
@@ -572,22 +683,6 @@ def truncate_long_prompts(batch):
         trimmed.append(txt)
     return {"text": trimmed}
 
-
-logging.info(f"  Formatting train dataset ({len(ds)} examples)...")
-dataset = ds.map(
-    formatting_prompts_func,
-    batched=True,
-    desc="Formatting train",
-).map(truncate_long_prompts, batched=True, desc="Truncating train")
-
-logging.info(f"  Formatting eval dataset ({len(eval_ds)} examples)...")
-eval_dataset_mapped = eval_ds.map(
-    formatting_prompts_func,
-    batched=True,
-    desc="Formatting eval",
-).map(truncate_long_prompts, batched=True, desc="Truncating eval")
-
-logging.info(f"Datasets formatted. Train: {len(dataset)}, Eval: {len(eval_dataset_mapped)}")
 
 data_collator = DataCollatorForLanguageModeling(
     tokenizer=tokenizer,
@@ -642,7 +737,7 @@ training_arguments = TrainingArguments(
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=1,
     gradient_accumulation_steps=2,
-    optim="paged_adamw_32bit",
+    optim="adamw_torch",  # Changed from paged_adamw_32bit to avoid bitsandbytes dependency
     num_train_epochs=1,
     logging_steps=0.01,
     warmup_steps=10,
@@ -659,6 +754,8 @@ training_arguments = TrainingArguments(
     # Data loading optimization - prevents GPU stalls
     dataloader_num_workers=4,           # Use 4 CPU processes for data loading
     dataloader_pin_memory=True,         # Pin memory for faster GPU transfer
+    # DDP optimization - disable unused parameter detection for performance
+    ddp_find_unused_parameters=False,   # All LoRA params are used; avoid extra overhead
     # predict_with_generate=True,
     # generation_max_length=128
 )

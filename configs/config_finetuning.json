@@ -10,5 +10,7 @@
   "preprocessed_eval_path": "/home/jrhimmel/datasets/zotero-library/v0.61-preprocessed/eval.jsonl.gz",
 
   "target_context_tokens": 1200,
-  "target_response_tokens": 200
+  "target_response_tokens": 200,
+
+  "force_recreate_cache": false
 }
