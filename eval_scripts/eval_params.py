@@ -2,7 +2,6 @@ from transformers import AutoModelForCausalLM
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 import json
-import os
 import logging
 import gzip
 import simphile
@@ -87,82 +86,67 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 tokenizer = AutoTokenizer.from_pretrained(config["finetuned_path"], use_fast=True)
 
-test_prompt_style = """Below is an instruction that describes a task, paired with an input that provides further context.
-Write a response that appropriately completes the request.
+# Configure tokenizer to match training setup
+tokenizer.model_max_length = 4096  # Match training config
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+tokenizer.padding_side = 'left'  # For generation
 
-### Instruction:
-You are a scientist with advanced knowledge in philosophy and social sciences.
-Please, continue for the following text.
+# System message matching training script
+SYSTEM_MESSAGE = "You are a scientist with advanced knowledge in philosophy and social sciences. Please, write the next paragraph for the following text."
 
-### Text:
-{}
-
-### Response:
-"""
-
-logging.info("Loading dataset:")
-
-
-if config['load_cleaned']:
-    inputs = []
-    for file in os.listdir(config["data_path"]):
-        with gzip.open("{}/{}".format(config["data_path"], file), "rt") as f:
-            subsamples = json.load(f)
-            inputs.extend(list(subsamples.values()))
-else:
-    inputs = []
-    for file in os.listdir(config["data_path"]):
-        with open("{}/{}".format(config["data_path"], file)) as f:
-            inputs.append(f.read())
-    del inputs[6326] # broken file
-
-# for i, llm_doc in enumerate(inputs):
-#     corpus.add_book("Our corpus", str(i), llm_doc)
-#
-# corpus.tokenise(tokenise_remove_pronouns_en)
-
-inputs = inputs[:config.get("eval_size", 32)]
-
-def cut_length_in(x, config):
+def format_prompt_with_chat_template(context: str) -> str:
     """
-    Cut input text to specified prompt length for evaluation.
-    
+    Format a prompt using Qwen chat template.
+
     Args:
-        x (str): Input text to truncate
-        config (dict): Configuration dictionary containing 'eval_length_prompt'
-        
+        context (str): The text context to continue
+
     Returns:
-        str: Truncated text limited to 1/8 of original length or config limit
-        
-    Examples:
-        >>> cut_length_in("very long text...", {"eval_length_prompt": 2048})
-        "very long text..."[:min(len(text)//8, 2048)]
+        str: Formatted prompt ready for generation
     """
-    ct_l = min(len(x)//8, config.get("eval_length_prompt", 2048))
-    return x[:ct_l]
+    messages = [
+        {"role": "system", "content": SYSTEM_MESSAGE},
+        {"role": "user", "content": context},
+    ]
 
-def cut_length_response(x, config):
-    """
-    Cut response text to specified length for evaluation.
-    
-    Args:
-        x (str): Input text to extract response from
-        config (dict): Configuration dictionary containing length parameters
-        
-    Returns:
-        str: Response text extracted from middle portion of input, limited by config
-        
-    Examples:
-        >>> cut_length_response("prompt text response text", config)
-        "response text"  # extracted from middle portion
-    """
-    ct_l = min(len(x)//8, config.get("eval_length_prompt", 2048))
-    cl_2 = min(len(x)//8, config.get("eval_length_response", 2048))
-    return x[ct_l:ct_l + cl_2]
+    # Apply chat template with generation prompt (for inference)
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
 
+logging.info("Loading dataset from preprocessed eval data:")
 
-inputs_in = [test_prompt_style.format(cut_length_in(x, config)) + tokenizer.eos_token for x in inputs]
-inputs_out = [cut_length_response(x, config) for x in inputs]
+# Load preprocessed eval data (same format as training)
+inputs_context = []
+inputs_response = []
+
+logging.info(f"  Loading from {config['preprocessed_eval_path']}")
+with gzip.open(config['preprocessed_eval_path'], 'rt', encoding='utf-8') as f:
+    for line_num, line in enumerate(f):
+        try:
+            example = json.loads(line)
+            inputs_context.append(example.get("context", ""))
+            inputs_response.append(example.get("response", ""))
+        except json.JSONDecodeError as e:
+            logging.warning(f"  Line {line_num}: JSON decode error: {e}")
+            continue
+
+logging.info(f"  Loaded {len(inputs_context)} examples from preprocessed eval data")
+
+# Limit to eval_size samples
+eval_size = config.get("eval_size", 256)
+inputs_context = inputs_context[:eval_size]
+inputs_response = inputs_response[:eval_size]
+
+logging.info(f"Using {len(inputs_context)} examples for evaluation")
+
+# Format inputs with chat template (contexts are already properly chunked)
+inputs_in = [format_prompt_with_chat_template(context) for context in inputs_context]
+inputs_out = inputs_response  # Responses are already the ground truth
 
 
 
@@ -219,7 +203,7 @@ for temperature_full in range(50, 100, 10):
                     return_tensors="pt",
                     padding=True,
                     truncation=True,
-                    max_length=tokenizer.model_max_length, padding_side = 'left'
+                    max_length=tokenizer.model_max_length
                 ).to("cuda")
 
                 # Generate from base model

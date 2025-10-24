@@ -1,9 +1,9 @@
 {
-  "data_path": "/home/dhonchar/llm_project/clean_scripts/cleaned_data/",
-  "load_cleaned": true,
-  "logic_data":  "/home/dhonchar/llm_project/logic_dataset/test_dataset.csv",
+  "compute_device" : "mps",
+  "preprocessed_eval_path": "/Users/johanneshimmelreich/datasets/zotero-library/v0.61-preprocessed/eval.jsonl.gz",
+  "logic_data":  "/Users/johanneshimmelreich/datasets/logic_dataset/test_dataset.csv",
   "model_dir": "Qwen/Qwen2.5-3B-Instruct",
-  "finetuned_path": "/home/jrhimmel/workspace/llm_project/llm_scripts/output_skip_5/final_model",
+  "finetuned_path": "/Users/johanneshimmelreich/Github-repos/llm_project/llm_scripts/models/earthy-sponge-20-v24/",
   "batch_size": 1,
   "batch_size_eval": 16,
   "eval_length_prompt": 2048,

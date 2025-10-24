@@ -1,8 +1,6 @@
-from transformers import AutoModelForCausalLM
 from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import json
-import os
 import logging
 import gzip
 import simphile
@@ -10,17 +8,15 @@ from itertools import islice
 import spacy
 from tqdm import tqdm
 import torch
-import faststylometry
-from faststylometry import Corpus, tokenise_remove_pronouns_en, calculate_burrows_delta, predict_proba, calibrate
-import nltk
-import datasets
+from faststylometry import Corpus, tokenise_remove_pronouns_en, calculate_burrows_delta
 from datasets import load_dataset
-import pandas as pd
-import argparse
-import gc
 import re
+import pathlib
+from pathlib import Path
+import sys
 
-from faststylometry import tokenise_remove_pronouns_en
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent)) # otherwise ModuleNotFoundError: No module named 'utils' -- not sure why?
+from utils import Config
 
 def tokenise_en(text: str):
     """
@@ -59,8 +55,6 @@ def safe_tokenise(txt: str):
     return toks
 
 
-nltk.download("punkt")
-
 
 llm_corpora = load_dataset("browndw/human-ai-parallel-corpus")["train"]
 llm_corpus = llm_corpora.to_pandas()["text"].tolist()
@@ -72,12 +66,18 @@ for i, llm_doc in enumerate(llm_corpus):
     corpus.add_book("LLM-corpus", llm_titles[i], llm_doc)
 
 
-import argparse, pathlib, sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from utils import Config
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 config = Config("../configs/config_eval.json")
 
+DEVICE = config.get("compute_device")
 
 base = AutoModelForCausalLM.from_pretrained(config["model_dir"], device_map="auto").eval()
 # important - use "device_map" = "auto - reduces memory footprint
@@ -87,82 +87,82 @@ model = PeftModel.from_pretrained(
 
 tokenizer = AutoTokenizer.from_pretrained(config["finetuned_path"], use_fast=True)
 
-test_prompt_style = """Below is an instruction that describes a task, paired with an input that provides further context.
-Write a response that appropriately completes the request.
+# Configure tokenizer to match training setup
+tokenizer.model_max_length = 4096  # Match training config
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+tokenizer.padding_side = 'left'  # For generation
 
-### Instruction:
-You are a scientist with advanced knowledge in philosophy and social sciences.
-Please, continue for the following text.
+# System message matching training script
+SYSTEM_MESSAGE = "You are a scientist with advanced knowledge in philosophy and social sciences. Please, write the next paragraph for the following text."
 
-### Text:
-{}
+def format_prompt_with_chat_template(context: str) -> str:
+    """
+    Format a prompt using Qwen chat template.
 
-### Response:
-"""
+    Args:
+        context (str): The text context to continue
 
-logging.info("Loading dataset:")
+    Returns:
+        str: Formatted prompt ready for generation
+    """
+    messages = [
+        {"role": "system", "content": SYSTEM_MESSAGE},
+        {"role": "user", "content": context},
+    ]
 
+    # Apply chat template with generation prompt (for inference)
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
 
-if config['load_cleaned']:
-    inputs = []
-    for file in os.listdir(config["data_path"]):
-        with gzip.open("{}/{}".format(config["data_path"], file), "rt") as f:
-            subsamples = json.load(f)
-            inputs.extend(list(subsamples.values()))
-else:
-    inputs = []
-    for file in os.listdir(config["data_path"]):
-        with open("{}/{}".format(config["data_path"], file)) as f:
-            inputs.append(f.read())
-    del inputs[6326] # broken file
+logging.info("Loading dataset from preprocessed eval data:")
 
-for i, llm_doc in enumerate(inputs):
-    corpus.add_book("Our corpus", str(i), llm_doc)
+# Load preprocessed eval data (same format as training)
+inputs_context = []
+inputs_response = []
+
+# Get eval_size early for memory-efficient loading
+eval_size = config.get("eval_size", 256)
+# Load a bit more than eval_size to account for potential decode errors
+max_load = eval_size + 100
+
+logging.info(f"  Loading from {config['preprocessed_eval_path']}")
+with gzip.open(config['preprocessed_eval_path'], 'rt', encoding='utf-8') as f:
+    for line_num, line in enumerate(f):
+        # Stop early if we've loaded enough examples
+        if len(inputs_context) >= max_load:
+            break
+
+        try:
+            example = json.loads(line)
+            inputs_context.append(example.get("context", ""))
+            inputs_response.append(example.get("response", ""))
+        except json.JSONDecodeError as e:
+            logging.warning(f"  Line {line_num}: JSON decode error: {e}")
+            continue
+
+logging.info(f"  Loaded {len(inputs_context)} examples from preprocessed eval data")
+
+# Limit to eval_size samples BEFORE building corpus (more efficient)
+# (eval_size already retrieved above during loading)
+inputs_context = inputs_context[:eval_size]
+inputs_response = inputs_response[:eval_size]
+
+logging.info(f"Using {len(inputs_context)} examples for evaluation")
+
+# Build corpus from contexts for stylometry analysis (only the examples we'll use)
+for i, context in enumerate(inputs_context):
+    corpus.add_book("Our corpus", str(i), context)
 
 corpus.tokenise(safe_tokenise)
 
-inputs = inputs[:config.get("eval_size", 32)]
-
-def cut_length_in(x, config):
-    """
-    Cut input text to specified prompt length for evaluation.
-    
-    Args:
-        x (str): Input text to truncate
-        config (dict): Configuration dictionary containing 'eval_length_prompt'
-        
-    Returns:
-        str: Truncated text limited to 1/8 of original length or config limit
-        
-    Examples:
-        >>> cut_length_in("very long text...", {"eval_length_prompt": 2048})
-        "very long text..."[:min(len(text)//8, 2048)]
-    """
-    ct_l = min(len(x)//8, config.get("eval_length_prompt", 2048))
-    return x[:ct_l]
-
-def cut_length_response(x, config):
-    """
-    Cut response text to specified length for evaluation.
-    
-    Args:
-        x (str): Input text to extract response from
-        config (dict): Configuration dictionary containing length parameters
-        
-    Returns:
-        str: Response text extracted from middle portion of input, limited by config
-        
-    Examples:
-        >>> cut_length_response("prompt text response text", config)
-        "response text"  # extracted from middle portion
-    """
-    ct_l = min(len(x)//8, config.get("eval_length_prompt", 2048))
-    cl_2 = min(len(x)//8, config.get("eval_length_response", 2048))
-    return x[ct_l:ct_l + cl_2]
-
-
-inputs_in = [test_prompt_style.format(cut_length_in(x, config)) + tokenizer.eos_token for x in inputs]
-inputs_out = [cut_length_response(x, config) for x in inputs]
+# Format inputs with chat template (contexts are already properly chunked)
+inputs_in = [format_prompt_with_chat_template(context) for context in inputs_context]
+inputs_out = inputs_response  # Responses are already the ground truth
 
 
 # inputs_formatted = tokenizer(
@@ -262,8 +262,8 @@ with torch.no_grad():                          # no grads for inference
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=tokenizer.model_max_length, padding_side = 'left'
-        ).to("cuda")
+            max_length=tokenizer.model_max_length
+        ).to(DEVICE) 
 
         outs_base = base.generate(
             **encoded,
@@ -287,8 +287,8 @@ with torch.no_grad():                          # no grads for inference
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=tokenizer.model_max_length, padding_side='left'
-            ).to("cuda")
+                max_length=tokenizer.model_max_length
+            ).to(DEVICE)
         # finetuned (PEFT) model
         outs_ft = model.generate(
             **encoded,

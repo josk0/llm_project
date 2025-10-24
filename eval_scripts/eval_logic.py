@@ -33,30 +33,49 @@ from utils import Config
 config = Config("../configs/config_eval.json")
 
 
-
 base = AutoModelForCausalLM.from_pretrained(config["model_dir"], device_map="auto")
 
-model = PeftModel.from_pretrained(base, config["finetuned_path"]).to("cuda")
+model = PeftModel.from_pretrained(base, config["finetuned_path"]).to("auto")
 
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 tokenizer = AutoTokenizer.from_pretrained(config["finetuned_path"], use_fast=True)
 
-test_prompt_style = """Below is an instruction that describes a task, paired with an input that provides further context.
-Write a response that appropriately completes the request.
+# Configure tokenizer to match training setup
+tokenizer.model_max_length = 4096  # Match training config
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.pad_token_id = tokenizer.eos_token_id
+tokenizer.padding_side = 'left'  # For generation
 
-### Instruction:
-You are a scientist, proficient in logic. Read next premises and evaluate whether following statement is true, false, or uncertain, based solely on the premises. 
-Your response can be only true, false or uncertain.
+# System message for logic evaluation tasks
+SYSTEM_MESSAGE_LOGIC = "You are a scientist, proficient in logic. Read the premises and evaluate whether the following statement is true, false, or uncertain, based solely on the premises. Your response can be only true, false or uncertain."
 
-### Premises:
-{}
+def format_logic_prompt_with_chat_template(premises: str, statement: str) -> str:
+    """
+    Format a logic evaluation prompt using Qwen chat template.
 
-### Statement:
-{}
+    Args:
+        premises (str): The premises to base the evaluation on
+        statement (str): The statement to evaluate
 
-### Response:
-Statement above is: """
+    Returns:
+        str: Formatted prompt ready for generation
+    """
+    # Combine premises and statement into user message
+    user_content = f"### Premises:\n{premises}\n\n### Statement:\n{statement}\n\nStatement above is:"
+
+    messages = [
+        {"role": "system", "content": SYSTEM_MESSAGE_LOGIC},
+        {"role": "user", "content": user_content},
+    ]
+
+    # Apply chat template with generation prompt (for inference)
+    return tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=True,
+    )
 
 logging.info("Loading dataset:")
 
@@ -72,7 +91,7 @@ inputs['premises'] = inputs['premises'].apply(lambda x:ast.literal_eval(x))
 
 inputs = inputs.groupby('depth', group_keys=False).sample(config.get("eval_size_logic", 32), replace=False, random_state=0)
 
-inputs["formatted_input"] = inputs.apply(lambda x: test_prompt_style.format("\n".join(x["premises"]), x['question']), axis = 1)
+inputs["formatted_input"] = inputs.apply(lambda x: format_logic_prompt_with_chat_template("\n".join(x["premises"]), x['question']), axis = 1)
 inputs["formatted_output"] = inputs["formatted_input"] + inputs["label"].str.lower()
 
 inputs_in = inputs["formatted_input"].tolist()
@@ -98,7 +117,7 @@ with torch.no_grad():                          # no grads for inference
             return_tensors="pt",
             padding=True,
             truncation=True,
-            max_length=tokenizer.model_max_length, padding_side = 'left'
+            max_length=tokenizer.model_max_length
         ).to("cuda")
 
         outs_base = base.generate(
