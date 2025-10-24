@@ -316,6 +316,89 @@ def load_preprocessed_dataset(filepath: str) -> datasets.Dataset:
     })
 
 
+def formatting_prompts_func(examples):
+    """
+    Format context-response pairs into Qwen chat template prompts.
+
+    Converts preprocessed chunks into formatted prompts using Qwen's
+    chat template with system message.
+
+    Args:
+        examples (dict): Dictionary containing "context" and "response" keys
+
+    Returns:
+        dict: Dictionary with formatted "text" key (chat template output)
+
+    Examples:
+        >>> examples = {"context": ["Text..."], "response": ["Continuation..."]}
+        >>> result = formatting_prompts_func(examples)
+        >>> print(result["text"][0])
+    """
+    contexts = examples["context"]
+    responses = examples["response"]
+    texts = []
+
+    for context, response in zip(contexts, responses):
+        # Build messages for Qwen chat template
+        messages = [
+            {"role": "system", "content": SYSTEM_MESSAGE},
+            {"role": "user", "content": context},
+            {"role": "assistant", "content": response},
+        ]
+
+        # Apply Qwen's chat template
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=False,
+        )
+
+        # Truncate if necessary (with proper truncation to avoid warnings)
+        tokens = tokenizer.encode(
+            text,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=config["max_eval_tok"]
+        )
+        # Decode back to text to ensure consistent formatting
+        text = tokenizer.decode(tokens, skip_special_tokens=True)
+
+        texts.append(text)
+
+    return {"text": texts}
+
+
+def truncate_long_prompts(batch):
+    """
+    Truncate prompts that exceed the maximum token limit.
+
+    NOTE: This function is now redundant since truncation already happens
+    in formatting_prompts_func. Kept for backwards compatibility.
+
+    Args:
+        batch (dict): Batch containing "text" key with prompts
+
+    Returns:
+        dict: Batch with truncated prompts
+
+    Examples:
+        >>> batch = {"text": ["very long prompt..."]}
+        >>> result = truncate_long_prompts(batch)
+    """
+
+    trimmed = []
+    for txt in batch["text"]:                 # txt is a string
+        tokens = tokenizer.encode(
+            txt,
+            add_special_tokens=False,
+            truncation=True,
+            max_length=config["max_eval_tok"]
+        )
+        txt = tokenizer.decode(tokens, skip_special_tokens=True)
+        trimmed.append(txt)
+    return {"text": trimmed}
+
+
 def get_formatted_cache_path(preprocessed_path: str) -> str:
     """
     Derive the formatted cache directory path from preprocessed file path.
@@ -597,91 +680,6 @@ class LLMSampleCB(WandbCallback):
     #     super().on_evaluate(args, state, control, **kwargs)
     #     records_table = self.samples_table(self.sample_dataset)
     #     self._wandb.log({"sample_predictions": records_table})
-
-
-
-
-def formatting_prompts_func(examples):
-    """
-    Format context-response pairs into Qwen chat template prompts.
-
-    Converts preprocessed chunks into formatted prompts using Qwen's
-    chat template with system message.
-
-    Args:
-        examples (dict): Dictionary containing "context" and "response" keys
-
-    Returns:
-        dict: Dictionary with formatted "text" key (chat template output)
-
-    Examples:
-        >>> examples = {"context": ["Text..."], "response": ["Continuation..."]}
-        >>> result = formatting_prompts_func(examples)
-        >>> print(result["text"][0])
-    """
-    contexts = examples["context"]
-    responses = examples["response"]
-    texts = []
-
-    for context, response in zip(contexts, responses):
-        # Build messages for Qwen chat template
-        messages = [
-            {"role": "system", "content": SYSTEM_MESSAGE},
-            {"role": "user", "content": context},
-            {"role": "assistant", "content": response},
-        ]
-
-        # Apply Qwen's chat template
-        text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=False,
-        )
-
-        # Truncate if necessary (with proper truncation to avoid warnings)
-        tokens = tokenizer.encode(
-            text,
-            add_special_tokens=False,
-            truncation=True,
-            max_length=config["max_eval_tok"]
-        )
-        # Decode back to text to ensure consistent formatting
-        text = tokenizer.decode(tokens, skip_special_tokens=True)
-
-        texts.append(text)
-
-    return {"text": texts}
-
-
-def truncate_long_prompts(batch):
-    """
-    Truncate prompts that exceed the maximum token limit.
-
-    NOTE: This function is now redundant since truncation already happens
-    in formatting_prompts_func. Kept for backwards compatibility.
-
-    Args:
-        batch (dict): Batch containing "text" key with prompts
-
-    Returns:
-        dict: Batch with truncated prompts
-
-    Examples:
-        >>> batch = {"text": ["very long prompt..."]}
-        >>> result = truncate_long_prompts(batch)
-    """
-
-    trimmed = []
-    for txt in batch["text"]:                 # txt is a string
-        tokens = tokenizer.encode(
-            txt,
-            add_special_tokens=False,
-            truncation=True,
-            max_length=config["max_eval_tok"]
-        )
-        txt = tokenizer.decode(tokens, skip_special_tokens=True)
-        trimmed.append(txt)
-    return {"text": trimmed}
 
 
 data_collator = DataCollatorForLanguageModeling(
