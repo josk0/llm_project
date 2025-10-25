@@ -358,5 +358,5 @@ results["finetuned"]["responses"] = responses
 results["finetuned"]["burrows"] = calculate_burrows_delta(corpus, test_corpus_finetuned, vocab_size = 100).to_dict()
 
 # Save evaluation results to output file
-with open(config["out_eval_file"], "w") as f:
+with open(f"out/{config.get('model_name')}_completion.json", "w") as f:
     json.dump(results, f)

@@ -1,43 +1,30 @@
-from transformers import AutoModelForCausalLM
 from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer
 import json
-import os
 import logging
-import gzip
-import simphile
 from itertools import islice
 import spacy
 from tqdm import tqdm
 import torch
-import faststylometry
-from faststylometry import Corpus, tokenise_remove_pronouns_en, calculate_burrows_delta, predict_proba, calibrate
-import nltk
-import datasets
-from datasets import load_dataset
 import pandas as pd
 import ast
-
-nltk.download("punkt")
-
-
 # device = "cpu" # can be "cpu" or "cuda
 # inference on cuda takes too much memory
-import argparse, pathlib, sys
-import logging
+import pathlib
+import sys
+
+
 
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from utils import Config
 
 config = Config("../configs/config_eval.json")
+DEVICE = config.get("compute_device")
 
+base = AutoModelForCausalLM.from_pretrained(config["model_dir"], device_map=DEVICE)
 
-base = AutoModelForCausalLM.from_pretrained(config["model_dir"], device_map="auto")
-
-model = PeftModel.from_pretrained(base, config["finetuned_path"]).to("auto")
-
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+model = PeftModel.from_pretrained(base, config["finetuned_path"]).to(DEVICE)
 
 tokenizer = AutoTokenizer.from_pretrained(config["finetuned_path"], use_fast=True)
 
@@ -155,5 +142,5 @@ results["ground_truth"] = inputs_out
 results["responses_orig"] = responses_orig
 results["responses_ft"] = responses
 
-with open("out/out_logic.json", "w") as f:
+with open(f"out/{config.get('model_name')}_logic.json", "w") as f:
     json.dump(results, f)

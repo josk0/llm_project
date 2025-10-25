@@ -12,7 +12,8 @@ log        = logs_eval/$(LOGFILE).log
 getenv     = True
 
 
-Requirements = (CUDADriverVersion >= 12.0) && (TotalSlotGPUs >= 1)
+# Depending on available nodes and model size, might need to add memory min, e.g., && (CUDAGlobalMemoryMb >= 20000)
+Requirements = (CUDADriverVersion >= 12.0) && (CUDACapability >= 8) && (TotalSlotGPUs >= 1) 
 
 +request_gpus = 1
 queue
