@@ -13,7 +13,7 @@ import numpy as np
 # In[2]:
 
 
-with open("results/out_logic.json", 'r') as f:
+with open("out/earthy-sponge-20-final_logic.json", 'r') as f:
     res = json.load(f)
 
 
