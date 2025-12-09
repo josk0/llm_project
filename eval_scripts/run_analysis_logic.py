@@ -1,9 +1,9 @@
 import json
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
-from tqdm.notebook import tqdm
-import spacy
+import tqdm
 from itertools import chain
+import spacy
 from collections import Counter
 from sklearn.metrics import f1_score
 from sklearn.metrics import classification_report
@@ -77,14 +77,10 @@ df['cut_resp_orig'] = df['responses_orig'].apply(lambda x: x[x.find("You must th
 # In[10]:
 
 
-
-
-tqdm.pandas()
-
 nlp = spacy.load("en_core_web_sm") # Load a small English model
 
 # df['testing'] = df['cut_resp_orig'].apply(lambda x:sent_tokenize(x))
-df['testing'] = df['cut_resp_orig'].progress_apply(lambda x:[y.text for y in nlp(x).sents])
+df['testing'] = df['cut_resp_orig'].apply(lambda x:[y.text for y in nlp(x).sents])
 
 
 # In[11]:
@@ -114,35 +110,18 @@ df['conv_orig_false'] = df['cut_resp_orig'].apply(lambda x: "the statement is fa
 df['conv_orig_uncertain'] = df['cut_resp_orig'].apply(lambda x: "the statement is uncertain" in x.lower() or "the statement is neither true nor false" in x.lower() or "statement above is uncertain" in x.lower() or "the statement is uncertain because it is neither true nor false" in x.lower())
 
 
-# In[ ]:
-
-
-
-
-
-# In[14]:
-
 
 df["unique_answer_ft"] = (df[["conv_ft_true", "conv_ft_false", "conv_ft_uncertain"]].sum(axis=1) == 1).values
 df["unique_answer_orig"] = (df[["conv_orig_true", "conv_orig_false", "conv_orig_uncertain"]].sum(axis=1) == 1).values
-
-
-# In[15]:
 
 
 df['ft_pred_name'] = df[["conv_ft_true", "conv_ft_false", "conv_ft_uncertain"]].idxmax(axis=1)
 df['orig_pred_name'] = df[["conv_orig_true", "conv_orig_false", "conv_orig_uncertain"]].idxmax(axis=1)
 
 
-# In[16]:
-
-
 mapper = {"conv_ft_true":"true", "conv_ft_false":"false", "conv_ft_uncertain":"uncertain", "conv_orig_true":"true", "conv_orig_false":"false", "conv_orig_uncertain":"uncertain"}
 df['ft_pred'] = df['ft_pred_name'].apply(lambda x: mapper[x])
 df['orig_pred'] = df['orig_pred_name'].apply(lambda x: mapper[x])
-
-
-# In[17]:
 
 
 
@@ -157,38 +136,16 @@ for d in range(1, 7):
     print(d, classification_report(predictions_ft, ground_truth_ft))
 
 
-# In[18]:
-
-
-
-
 plt.plot(range(1, 7), f1_finetuning)
 
 
-# In[19]:
-
-
 plt.plot(range(1, 7), number_parsed_ft)
-
-
-# In[20]:
-
-
-
-
-
-# In[21]:
 
 
 predictions_ft = le.transform(df[df["unique_answer_ft"]]['ft_pred'])
 ground_truth_ft = df[df["unique_answer_ft"]]['ground_truth_encoded']
 
 print(classification_report(predictions_ft, ground_truth_ft))
-
-
-# In[22]:
-
-
 
 
 f1_orig = []

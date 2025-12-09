@@ -1,0 +1,21 @@
+conda activate llm_finetuning
+
+cd /Users/johanneshimmelreich/Github-repos/llama.cpp
+
+python convert_lora_to_gguf.py \
+  ~/Github-repos/llm_project/llm_scripts/models/earthy-sponge-20-final/ \
+  --outfile earthy-sponge-20-final.gguf \
+  --base /Users/johanneshimmelreich/models/qwen2.5-3b-instruct
+
+llama-cli \
+  -m ~/models/qwen2.5-3b-instruct-gguf/qwen2.5-3b-instruct-q4_k_m.gguf \
+  --lora ~/Github-repos/llm_project/llm_scripts/models/earthy-sponge-20-final.gguf \
+  --system-prompt "You are a scientist with advanced knowledge in philosophy and social sciences. Please, write the next paragraph for the following text." \
+  -i \
+  -ngl 999
+
+
+llama-cli \
+-m ~/models/qwen2.5-3b-instruct-gguf/qwen2.5-3b-instruct-q4_k_m.gguf \
+-i \
+-ngl 999

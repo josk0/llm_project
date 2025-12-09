@@ -30,7 +30,7 @@ eval\_scripts/
 In addition to repo root requirements, install:
 
 ```bash
-conda create -n eval_model python=3.10 -y
+conda create -n eval_model python=3.11 pip matplotlib -y
 conda activate eval_model
 
 pip install torch transformers peft datasets tqdm simphile faststylometry spacy nltk
